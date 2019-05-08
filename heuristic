@@ -1,0 +1,89 @@
+import networkx as nx
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import random
+
+
+#将邻接矩阵导入
+df = pd.read_csv("E:\\exp\\exp.csv",header = None)
+#df = pd.read_excel("E:\\exp\\test.xlsx",header = None)
+adj_matrix=df.as_matrix()
+#创建图
+G=nx.Graph(adj_matrix)
+#得出顶点个数
+n=len(adj_matrix)
+vertices=list(G.node)
+print(G.number_of_nodes())
+# #画图
+# nx.draw(G,node_size = 30,width=1,with_labels=1)
+# plt.show()
+
+#得出一个组内元素与outisders的邻居个数
+#参数rest_group要传入删除member后的组内所有点
+def member_neighbors(member,rest_group,G):
+    tempG=G.copy()
+    tempG.remove_nodes_from(rest_group)
+    neighor_list=list(tempG.neighbors(member))
+    return neighor_list
+
+#得出group内所有点与outsider的邻居列表
+def group_neighbors(group,G):
+    all_neighbor_list=[]
+    tempG = G.copy()
+    for member in group:
+        tempgroup = group.copy()
+        tempgroup.remove(member)
+        lis=member_neighbors(member,tempgroup,tempG)
+        all_neighbor_list.extend(lis)
+    return all_neighbor_list
+#计算f_score
+def f_score(n,k,all_neighbor_list):
+    gis = len(all_neighbor_list)
+    gdc = len(np.unique(all_neighbor_list))
+    f_score = (n *gis*gdc)/((n-k)*(gis+k*gdc))
+    return f_score
+#得出outsidersch
+def cal_outsiders(vertices,group):
+    outsiders=[]
+    for out in vertices:
+        if out not in group:
+            outsiders.append(out)
+    return outsiders
+
+#确定组内成员个数
+k=3
+#随机选出group中的成员
+#group = random.sample(range(0,124),k);
+group = random.sample(range(0,9),k)
+print(group)
+
+l_group = group_neighbors(group, G)
+f_group=f_score(n, k, l_group)
+print(f_group)
+
+outsiders=cal_outsiders(vertices,group)
+delta=1
+while delta>0 :
+    mem_dict = {}
+    #计算交换的组（每次只交换一个元素）且是列表最后一个元素
+    for member in group:
+        for out in outsiders:
+            exgroup=group.copy()
+            exgroup.remove(member)
+            exgroup.append(out)
+            l = group_neighbors(exgroup, G)
+            f=f_score(n, k, l)
+            mem_dict[f]=exgroup
+
+    fmax = max(mem_dict, key=float)
+    delta=fmax-f_group
+    if delta>0:
+        #该member交换后f_score提高
+        group=mem_dict[fmax]
+        outsiders=cal_outsiders(vertices,group)
+        f_group=fmax
+
+#print(mem_dict)
+print(group)
+print(f_group)
