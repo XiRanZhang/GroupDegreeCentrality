@@ -5,19 +5,45 @@ import pandas as pd
 import random
 
 
-#将邻接矩阵导入
-df = pd.read_csv("E:\\exp\\exp.csv",header = None)
-#df = pd.read_excel("E:\\exp\\test.xlsx",header = None)
-adj_matrix=df.as_matrix()
-#创建图
-G=nx.Graph(adj_matrix)
-#得出顶点个数
-n=len(adj_matrix)
-vertices=list(G.node)
-print(G.number_of_nodes())
-# #画图
-# nx.draw(G,node_size = 30,width=1,with_labels=1)
-# plt.show()
+#将经纬坐标导入，第一行为列名
+df = pd.read_excel("E:\\exp\\coord_data.xlsx",sheet_name='Sheet2')
+#通过经纬坐标计算距离矩阵，单位：km
+def get_distances(lat_lon,earth_radius = 3958.75):
+   lat,lon=np.meshgrid(lat_lon[:,0],lat_lon[:,1])
+   lats1=lat
+   lats2=np.transpose(lat)
+   lons1=lon
+   lons2=np.transpose(lon)
+
+   lat_dif = np.radians(lats1 - lats2)
+   long_dif = np.radians(lons1 - lons2)
+
+   sin_d_lat = np.sin(lat_dif / 2.)
+   sin_d_long = np.sin(long_dif / 2.)
+
+   step_1 = (sin_d_lat ** 2) + (sin_d_long ** 2) * np.cos(np.radians(lats1)) * np.cos(np.radians(lats2))
+   step_2 = 2 * np.arctan2(np.sqrt(step_1), np.sqrt(1-step_1))
+
+   dist = step_2 * earth_radius
+   return dist
+#导出group
+def nearest_subgraph_k(size,server_G):
+    seed = random.randint(0, len(server_G) - 1)
+    group = [seed]
+    sort_list = sorted(server_G[seed].items(), key=lambda edge: edge[1]['weight'])
+    i = 0
+    while (len(group) < size):
+
+        if sort_list[i][0] not in group:
+            seed = sort_list[i][0]
+            group.append(seed)
+            temp_sort = sorted(server_G[seed].items(), key=lambda edge: edge[1]['weight'])
+            np.unique(sort_list.extend(temp_sort))
+            sort_list = sorted(sort_list, key=lambda x: x[1]['weight'])
+            i = 0
+        else:
+            i += 1
+    return group
 
 #得出一个组内元素与outisders的邻居个数
 #参数rest_group要传入删除member后的组内所有点
@@ -37,32 +63,50 @@ def group_neighbors(group,G):
         lis=member_neighbors(member,tempgroup,tempG)
         all_neighbor_list.extend(lis)
     return all_neighbor_list
+
 #计算f_score
 def f_score(n,k,all_neighbor_list):
     gis = len(all_neighbor_list)
     gdc = len(np.unique(all_neighbor_list))
     f_score = (n *gis*gdc)/((n-k)*(gis+k*gdc))
-    return f_score
-#得出outsidersch
+    return gis,gdc,f_score
+
+#得出outsiders成员
 def cal_outsiders(vertices,group):
     outsiders=[]
     for out in vertices:
         if out not in group:
             outsiders.append(out)
     return outsiders
+#程序开始
+#导入经纬度为array
+lat_lon=np.array(df)
+dist_matrix=get_distances(lat_lon)
+G=nx.Graph(dist_matrix)
 
-#确定组内成员个数
-k=3
-#随机选出group中的成员
-#group = random.sample(range(0,124),k);
-group = random.sample(range(0,9),k)
+#设置覆盖半径km
+coverage_radium=0.6
+#server_G为研究的图
+server_G_edges=[(u,v) for (u,v,d) in G.edges(data=True) if d['weight'] <coverage_radium]
+server_G=G.edge_subgraph(server_G_edges)
+
+n=len(server_G)
+vertices=vertices=list(server_G.node)
+#冗余服务器占比
+ratio=0.3
+
+k = n*ratio
+print(k)
+#根据生成group算法，生成组
+group=nearest_subgraph_k(k,server_G)
 print(group)
+list_group_neighbor = group_neighbors(group, server_G)
 
-l_group = group_neighbors(group, G)
-f_group=f_score(n, k, l_group)
-print(f_group)
+gis,gdc,f_g=f_score(n, k, list_group_neighbor)
+print(f_g)
 
 outsiders=cal_outsiders(vertices,group)
+
 delta=1
 while delta>0 :
     mem_dict = {}
@@ -72,18 +116,22 @@ while delta>0 :
             exgroup=group.copy()
             exgroup.remove(member)
             exgroup.append(out)
-            l = group_neighbors(exgroup, G)
-            f=f_score(n, k, l)
+            li = group_neighbors(exgroup, server_G)
+            i,g,f=f_score(n,k,li)
             mem_dict[f]=exgroup
 
     fmax = max(mem_dict, key=float)
-    delta=fmax-f_group
+    delta=fmax-f_g
     if delta>0:
         #该member交换后f_score提高
         group=mem_dict[fmax]
         outsiders=cal_outsiders(vertices,group)
-        f_group=fmax
+        f_g=fmax
 
 #print(mem_dict)
 print(group)
-print(f_group)
+print(f_g)
+
+# #画图
+# nx.draw(G,node_size = 30,width=1,with_labels=1)
+# plt.show()
