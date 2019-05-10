@@ -3,10 +3,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import random
-
+import time
 
 #将经纬坐标导入，第一行为列名
 df = pd.read_excel("E:\\exp\\coord_data.xlsx",sheet_name='Sheet2')
+
 #通过经纬坐标计算距离矩阵，单位：km
 def get_distances(lat_lon,earth_radius = 3958.75):
    lat,lon=np.meshgrid(lat_lon[:,0],lat_lon[:,1])
@@ -26,24 +27,24 @@ def get_distances(lat_lon,earth_radius = 3958.75):
 
    dist = step_2 * earth_radius
    return dist
-#导出group
+#导出子图n
 def nearest_subgraph_k(size,server_G):
     seed = random.randint(0, len(server_G) - 1)
-    group = [seed]
+    subgraph_n = [seed]
     sort_list = sorted(server_G[seed].items(), key=lambda edge: edge[1]['weight'])
     i = 0
-    while (len(group) < size):
+    while (len(subgraph_n) < size):
 
-        if sort_list[i][0] not in group:
+        if sort_list[i][0] not in subgraph_n:
             seed = sort_list[i][0]
-            group.append(seed)
+            subgraph_n.append(seed)
             temp_sort = sorted(server_G[seed].items(), key=lambda edge: edge[1]['weight'])
             np.unique(sort_list.extend(temp_sort))
             sort_list = sorted(sort_list, key=lambda x: x[1]['weight'])
             i = 0
         else:
             i += 1
-    return group
+    return server_G.subgraph(subgraph_n)
 
 #得出一个组内元素与outisders的邻居个数
 #参数rest_group要传入删除member后的组内所有点
@@ -79,6 +80,7 @@ def cal_outsiders(vertices,group):
             outsiders.append(out)
     return outsiders
 #程序开始
+starttime = time.clock()
 #导入经纬度为array
 lat_lon=np.array(df)
 dist_matrix=get_distances(lat_lon)
@@ -89,18 +91,23 @@ coverage_radium=0.6
 #server_G为研究的图
 server_G_edges=[(u,v) for (u,v,d) in G.edges(data=True) if d['weight'] <coverage_radium]
 server_G=G.edge_subgraph(server_G_edges)
+#设置size=n
+size=8
+subgraph_n=nearest_subgraph_k(size,server_G)
+n=len(subgraph_n)
+vertices=vertices=list(subgraph_n.node)
+print(vertices)
 
-n=len(server_G)
-vertices=vertices=list(server_G.node)
+
 #冗余服务器占比
 ratio=0.3
-
 k = n*ratio
 print(k)
-#根据生成group算法，生成组
-group=nearest_subgraph_k(k,server_G)
+
+#随机生成group，生成组
+group=random.sample(vertices,int(k))
 print(group)
-list_group_neighbor = group_neighbors(group, server_G)
+list_group_neighbor = group_neighbors(group, subgraph_n)
 
 gis,gdc,f_g=f_score(n, k, list_group_neighbor)
 print(f_g)
@@ -116,7 +123,7 @@ while delta>0 :
             exgroup=group.copy()
             exgroup.remove(member)
             exgroup.append(out)
-            li = group_neighbors(exgroup, server_G)
+            li = group_neighbors(exgroup, subgraph_n)
             i,g,f=f_score(n,k,li)
             mem_dict[f]=exgroup
 
@@ -127,11 +134,11 @@ while delta>0 :
         group=mem_dict[fmax]
         outsiders=cal_outsiders(vertices,group)
         f_g=fmax
-
+endtime = time.clock()
 #print(mem_dict)
 print(group)
 print(f_g)
-
+print (endtime-starttime)
 # #画图
 # nx.draw(G,node_size = 30,width=1,with_labels=1)
 # plt.show()
