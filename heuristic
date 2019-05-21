@@ -1,14 +1,15 @@
-import networkx as nx
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import random
+import networkx as nx
+import matplotlib.pyplot as plt
 import time
-
-#将经纬坐标导入，第一行为列名
-df = pd.read_excel("E:\\exp\\coord_data.xlsx",sheet_name='Sheet2')
-
+#---------------------------------
 #通过经纬坐标计算距离矩阵，单位：km
+#输入：lat_lon是n*2矩阵，第一列为精度，第二列为维度
+#输出：两两坐标之间的距离矩阵
+#----------------------------------
+
 def get_distances(lat_lon,earth_radius = 3958.75):
    lat,lon=np.meshgrid(lat_lon[:,0],lat_lon[:,1])
    lats1=lat
@@ -27,32 +28,36 @@ def get_distances(lat_lon,earth_radius = 3958.75):
 
    dist = step_2 * earth_radius
    return dist
-#导出子图n
-def nearest_subgraph_k(size,server_G):
-    seed = random.randint(0, len(server_G) - 1)
+
+#-----------------
+#生成顶点数为size的子图
+#输入size,125个顶点的距离矩阵
+#输出：有size个顶点的array,用于生成原图的子图
+#返回值是subgraph_n means subgraph_nodes
+# #-----------------
+
+def nearest_subgraph_n(size,dist_matrix):
+    # 产生一个随机位置
+    seed = random.randint(0, len(dist_matrix) - 1)
     subgraph_n = [seed]
-    sort_list = sorted(server_G[seed].items(), key=lambda edge: edge[1]['weight'])
-    i = 0
+    # 将已经选出的图的顶点 的每一行距离选出
+    all_col = dist_matrix[np.ix_(subgraph_n)]
+    # 去除掉0
+    nonzere_el = all_col[all_col > 0]
+
     while (len(subgraph_n) < size):
-
-        if sort_list[i][0] not in subgraph_n:
-            seed = sort_list[i][0]
-            subgraph_n.append(seed)
-            temp_sort = sorted(server_G[seed].items(), key=lambda edge: edge[1]['weight'])
-            np.unique(sort_list.extend(temp_sort))
-            sort_list = sorted(sort_list, key=lambda x: x[1]['weight'])
-            i = 0
+        min_dis = min(nonzere_el)
+        # 找到距离最近的顶点
+        nearest_v = np.argwhere(all_col == min_dis)[0][1]
+        if (nearest_v not in subgraph_n):
+            subgraph_n.append(nearest_v)
+            all_col = dist_matrix[np.ix_(subgraph_n)]
+            # 去除掉0
+            nonzere_el = all_col[all_col > 0]
         else:
-            i += 1
-    return server_G.subgraph(subgraph_n)
+            nonzere_el = nonzere_el[nonzere_el > min_dis]
+    return subgraph_n
 
-#得出一个组内元素与outisders的邻居个数
-#参数rest_group要传入删除member后的组内所有点
-def member_neighbors(member,rest_group,G):
-    tempG=G.copy()
-    tempG.remove_nodes_from(rest_group)
-    neighor_list=list(tempG.neighbors(member))
-    return neighor_list
 
 #得出group内所有点与outsider的邻居列表
 def group_neighbors(group,G):
@@ -65,11 +70,24 @@ def group_neighbors(group,G):
         all_neighbor_list.extend(lis)
     return all_neighbor_list
 
+
+#得出一个组内元素与outisders的邻居个数
+#参数rest_group要传入删除member后的组内所有点
+#该方法被group_neighbors调用
+def member_neighbors(member,rest_group,G):
+    tempG=G.copy()
+    tempG.remove_nodes_from(rest_group)
+    neighor_list=list(tempG.neighbors(member))
+    return neighor_list
+
+
 #计算f_score
+#根据size(n),k,和邻居列表计算目标值f-score
+#返回值顺序是gis,gdc,f_score
 def f_score(n,k,all_neighbor_list):
     gis = len(all_neighbor_list)
     gdc = len(np.unique(all_neighbor_list))
-    f_score = (n *gis*gdc)/((n-k)*(gis+k*gdc))
+    f_score = (2 *gis*gdc)/((n-k)*(gis+k*gdc))
     return gis,gdc,f_score
 
 #得出outsiders成员
@@ -79,66 +97,84 @@ def cal_outsiders(vertices,group):
         if out not in group:
             outsiders.append(out)
     return outsiders
-#程序开始
-starttime = time.clock()
-#导入经纬度为array
+
+#启发式算法
+
+def heuristic(subgraph,k,size):
+    subgraph_n=list(nx.nodes(subgraph))
+    # 随机选取group，启发式算法开始
+    group = random.sample(subgraph_n, int(k))
+    print(group)
+    # 计算随机选取处的group目标函数值
+    list_group_neighbor = group_neighbors(group, subgraph)
+    gis, gdc, f_g = f_score(size, k, list_group_neighbor)
+    print("gis,gdc,f_g",gis, gdc, f_g)
+    # 计算此时组外的成员
+    outsiders = cal_outsiders(subgraph_n, group)
+
+
+    delta = 1  # 初始化为1，可以开始开始交换组内外元素
+    while delta > 0:
+        mem_dict = {}
+        # 计算交换的组（每次只交换一个元素）且是列表最后一个元素
+        for member in group:
+            for out in outsiders:
+                exgroup = group.copy()
+                exgroup.remove(member)
+                exgroup.append(out)
+                list_ex_neig = group_neighbors(exgroup, subgraph)
+                gis_ex, gdc_ex, f_ex = f_score(size, k, list_ex_neig)
+                #用字典存储，f-score为key值，value依次group,gis,gdc
+                mem_dict[f_ex] = [exgroup,gis_ex,gdc_ex]
+
+        fmax = max(mem_dict, key=float)
+        delta = fmax - f_g
+        if delta > 0:
+            # 该member交换后f_score提高
+            group = mem_dict[fmax][0]
+            outsiders = cal_outsiders(subgraph_n, group)
+            f_g = fmax
+            gis=mem_dict[f_g][1]
+            gdc=mem_dict[f_g][2]
+
+
+    print(group,f_g,gis,gdc)
+
+    return group,f_g,gis,gdc
+
+df = pd.read_excel("E:\\exp\\coord_data.xlsx",sheet_name='Sheet1')
 lat_lon=np.array(df)
 dist_matrix=get_distances(lat_lon)
+
+#设置半径
+r=0.4
+#确定子图大小
+size=10
+#冗余服务器占比
+ratio=0.2
+k = size*ratio
+
+#将距离矩阵中大于半径r的元素置为0，其余元素不变
+dist_matrix=np.where(dist_matrix>r,0,dist_matrix)
+#将一张125个节点的大图画出
 G=nx.Graph(dist_matrix)
 
-#设置覆盖半径km
-coverage_radium=0.6
-#server_G为研究的图
-server_G_edges=[(u,v) for (u,v,d) in G.edges(data=True) if d['weight'] <coverage_radium]
-server_G=G.edge_subgraph(server_G_edges)
-#设置size=n
-size=8
-subgraph_n=nearest_subgraph_k(size,server_G)
-n=len(subgraph_n)
-vertices=vertices=list(subgraph_n.node)
-print(vertices)
+
+#生成子图
+subgraph_n=nearest_subgraph_n(size,dist_matrix)
+subgraph=G.subgraph(subgraph_n)
+print(subgraph_n)
 
 
-#冗余服务器占比
-ratio=0.3
-k = n*ratio
-print(k)
-
-#随机生成group，生成组
-group=random.sample(vertices,int(k))
-print(group)
-list_group_neighbor = group_neighbors(group, subgraph_n)
-
-gis,gdc,f_g=f_score(n, k, list_group_neighbor)
-print(f_g)
-
-outsiders=cal_outsiders(vertices,group)
-
-delta=1
-while delta>0 :
-    mem_dict = {}
-    #计算交换的组（每次只交换一个元素）且是列表最后一个元素
-    for member in group:
-        for out in outsiders:
-            exgroup=group.copy()
-            exgroup.remove(member)
-            exgroup.append(out)
-            li = group_neighbors(exgroup, subgraph_n)
-            i,g,f=f_score(n,k,li)
-            mem_dict[f]=exgroup
-
-    fmax = max(mem_dict, key=float)
-    delta=fmax-f_g
-    if delta>0:
-        #该member交换后f_score提高
-        group=mem_dict[fmax]
-        outsiders=cal_outsiders(vertices,group)
-        f_g=fmax
+starttime = time.clock()
+heuristic(subgraph,k,size)
 endtime = time.clock()
-#print(mem_dict)
-print(group)
-print(f_g)
 print (endtime-starttime)
-# #画图
-# nx.draw(G,node_size = 30,width=1,with_labels=1)
+
+
+
+
+# nx.draw(subgraph,node_size = 30,width=1,with_labels=0)
+# print(nx.number_of_edges(subgraph))
+# print(size*(size-1)/2)
 # plt.show()
