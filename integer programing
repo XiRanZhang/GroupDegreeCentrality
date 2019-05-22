@@ -1,0 +1,49 @@
+import pandas as pd
+from docplex.cp.model import CpoModel
+# import networkx as nx
+# import matplotlib.pyplot as plt
+
+#step1:读出二位数组a[i][j]
+a = pd.read_excel("E:\\exp\\adjMatrix_10ndoes.xlsx",header=None)
+
+n=len(a)#节点个数
+
+k=3
+nodes=range(0, n)
+
+model =CpoModel() #创建模型
+
+
+
+v = model.binary_var_list(n, name='v') #创建变量列表
+y = model.binary_var_list(n, name='y') #创建变量列表
+m = {(i,j): model.binary_var(name='m_{0}_{1}'.format(i,j)) for i in nodes for j in nodes}
+
+# model.maximize(model.sum(a[i,j]+y[i].get((i,j), 0) for i in nodes for j in nodes)  #设定目标函数
+
+gis=model.sum(m[i,j] for i in nodes  for j in nodes)/((n-k)*k*2)
+gdc=model.sum(y[i] for i in nodes)/n
+
+model.maximize( 2*gis*gdc/(gis+gdc))
+
+# model.maximize(gis)
+#添加约束条件
+for i in nodes:
+    model.add(y[i] <= a[i].sum())
+    model.add(v[i]+y[i] <= 1 )
+    for j in nodes:
+        model.add(3*m[i,j]<= a[i][j]+v[i]+y[j])
+
+model.add(model.sum(v[i] for i in nodes) == k)
+
+sol = model.solve()
+sol.print_solution()
+
+
+
+# print(sol)
+#
+# print(sol.solve_details)
+
+# nx.draw(G,node_size = 30,width=1,with_labels=1)
+# plt.show()
