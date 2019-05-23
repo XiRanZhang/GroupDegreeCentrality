@@ -1,0 +1,224 @@
+import numpy as np
+import pandas as pd
+import random
+import networkx as nx
+from docplex.cp.model import CpoModel
+import matplotlib.pyplot as plt
+import time
+#---------------------------------
+#通过经纬坐标计算距离矩阵，单位：km
+#输入：lat_lon是n*2矩阵，第一列为精度，第二列为维度
+#输出：两两坐标之间的距离矩阵
+#----------------------------------
+
+def get_distances(lat_lon,earth_radius = 3958.75):
+   lat,lon=np.meshgrid(lat_lon[:,0],lat_lon[:,1])
+   lats1=lat
+   lats2=np.transpose(lat)
+   lons1=lon
+   lons2=np.transpose(lon)
+
+   lat_dif = np.radians(lats1 - lats2)
+   long_dif = np.radians(lons1 - lons2)
+
+   sin_d_lat = np.sin(lat_dif / 2.)
+   sin_d_long = np.sin(long_dif / 2.)
+
+   step_1 = (sin_d_lat ** 2) + (sin_d_long ** 2) * np.cos(np.radians(lats1)) * np.cos(np.radians(lats2))
+   step_2 = 2 * np.arctan2(np.sqrt(step_1), np.sqrt(1-step_1))
+
+   dist = step_2 * earth_radius
+   return dist
+
+#-----------------
+#生成顶点数为size的子图
+#输入size,125个顶点的距离矩阵
+#输出：有size个顶点的array,用于生成原图的子图
+#返回值是subgraph_n means subgraph_nodes
+# #-----------------
+
+def nearest_subgraph_n(size,dist_matrix):
+    # 产生一个随机位置
+    seed = random.randint(0, len(dist_matrix) - 1)
+    subgraph_n = [seed]
+    # 将已经选出的图的顶点 的每一行距离选出
+    all_col = dist_matrix[np.ix_(subgraph_n)]
+    # 去除掉0
+    nonzere_el = all_col[all_col > 0]
+
+    while (len(subgraph_n) < size):
+        min_dis = min(nonzere_el)
+        # 找到距离最近的顶点
+        nearest_v = np.argwhere(all_col == min_dis)[0][1]
+        if (nearest_v not in subgraph_n):
+            subgraph_n.append(nearest_v)
+            all_col = dist_matrix[np.ix_(subgraph_n)]
+            # 去除掉0
+            nonzere_el = all_col[all_col > 0]
+        else:
+            nonzere_el = nonzere_el[nonzere_el > min_dis]
+    return subgraph_n
+
+
+#得出group内所有点与outsider的邻居列表
+def group_neighbors(group,G):
+    all_neighbor_list=[]
+    tempG = G.copy()
+    for member in group:
+        tempgroup = group.copy()
+        tempgroup.remove(member)
+        lis=member_neighbors(member,tempgroup,tempG)
+        all_neighbor_list.extend(lis)
+    return all_neighbor_list
+
+
+#得出一个组内元素与outisders的邻居个数
+#参数rest_group要传入删除member后的组内所有点
+#该方法被group_neighbors调用
+def member_neighbors(member,rest_group,G):
+    tempG=G.copy()
+    tempG.remove_nodes_from(rest_group)
+    neighor_list=list(tempG.neighbors(member))
+    return neighor_list
+
+
+#计算f_score
+#根据size(n),k,和邻居列表计算目标值f-score
+#返回值顺序是gis,gdc,f_score
+def f_score(n,k,all_neighbor_list):
+    gis = len(all_neighbor_list)
+    gdc = len(np.unique(all_neighbor_list))
+    f_score = (2 *gis*gdc)/((n-k)*(gis+k*gdc))
+    return gis,gdc,f_score
+
+#得出outsiders成员
+def cal_outsiders(vertices,group):
+    outsiders=[]
+    for out in vertices:
+        if out not in group:
+            outsiders.append(out)
+    return outsiders
+
+#启发式算法
+
+def heuristic(subgraph,k,size):
+    subgraph_n=list(nx.nodes(subgraph))
+    # 随机选取group，启发式算法开始
+    group = random.sample(subgraph_n, int(k))
+    print(group)
+    # 计算随机选取处的group目标函数值
+    list_group_neighbor = group_neighbors(group, subgraph)
+    gis, gdc, f_g = f_score(size, k, list_group_neighbor)
+    print("gis,gdc,f_g",gis, gdc, f_g)
+    # 计算此时组外的成员
+    outsiders = cal_outsiders(subgraph_n, group)
+
+
+    delta = 1  # 初始化为1，可以开始开始交换组内外元素
+    while delta > 0:
+        mem_dict = {}
+        # 计算交换的组（每次只交换一个元素）且是列表最后一个元素
+        for member in group:
+            for out in outsiders:
+                exgroup = group.copy()
+                exgroup.remove(member)
+                exgroup.append(out)
+                list_ex_neig = group_neighbors(exgroup, subgraph)
+                gis_ex, gdc_ex, f_ex = f_score(size, k, list_ex_neig)
+                #用字典存储，f-score为key值，value依次group,gis,gdc
+                mem_dict[f_ex] = [exgroup,gis_ex,gdc_ex]
+
+        fmax = max(mem_dict, key=float)
+        delta = fmax - f_g
+        if delta > 0:
+            # 该member交换后f_score提高
+            group = mem_dict[fmax][0]
+            outsiders = cal_outsiders(subgraph_n, group)
+            f_g = fmax
+            gis=mem_dict[f_g][1]
+            gdc=mem_dict[f_g][2]
+
+
+    print("group member, f-score,gis,gdc:",group,f_g,gis,gdc)
+
+    return group,f_g,gis,gdc
+
+df = pd.read_excel("E:\\exp\\coord_data.xlsx",sheet_name='Sheet1')
+lat_lon=np.array(df)
+dist_matrix=get_distances(lat_lon)
+
+#设置半径
+r=0.2
+#确定子图大小
+size=50
+#冗余服务器占比
+ratio=0.2
+k = size*ratio
+
+#将距离矩阵中大于半径r的元素置为0，其余元素不变
+dist_matrix=np.where(dist_matrix>r,0,dist_matrix)
+#将一张125个节点的大图画出
+G=nx.Graph(dist_matrix)
+
+# nx.draw(G,node_size = 30,width=1,with_labels=0)
+# plt.show()
+
+#生成子图
+subgraph_n=nearest_subgraph_n(size,dist_matrix)
+subgraph=G.subgraph(subgraph_n)
+print(subgraph_n)
+
+#启发式算法
+
+starttime = time.perf_counter()
+heuristic(subgraph,k,size)
+endtime = time.perf_counter()
+print ("run time:",endtime-starttime)
+
+
+# nx.draw(subgraph,node_size = 30,width=1,with_labels=0)
+# plt.show()
+
+
+
+#IP算法
+#step1:读出二位数组a[i][j]
+temp_dis_m=nx.to_numpy_matrix(subgraph)
+a=np.where(temp_dis_m>0,1,temp_dis_m)
+
+#a = pd.read_excel("E:\\exp\\adjMatrix_10ndoes.xlsx",header=None)
+
+n=len(a)#节点个数
+
+
+nodes=range(0, n)
+
+model =CpoModel() #创建模型
+
+
+
+v = model.binary_var_list(n, name='v') #创建变量列表
+y = model.binary_var_list(n, name='y') #创建变量列表
+m = {(i,j): model.binary_var(name='m_{0}_{1}'.format(i,j)) for i in nodes for j in nodes}
+
+# model.maximize(model.sum(a[i,j]+y[i].get((i,j), 0) for i in nodes for j in nodes)  #设定目标函数
+
+gis=model.sum(m[i,j] for i in nodes  for j in nodes)/((n-k)*k)
+gdc=model.sum(y[i] for i in nodes)/n
+
+model.maximize(2*gis*gdc/(gis+gdc))
+
+
+# model.maximize(gis)
+#添加约束条件
+for i in nodes:
+    model.add(y[i] <= a[i].sum())
+    model.add(v[i]+y[i] <= 1 )
+    model.add(v[i] + y[i] >= a[i].sum() / 125)
+    for j in nodes:
+        model.add(m[i,j]== (a[i][j]==1)&(v[i]==1)&(y[j]==1))
+
+model.add(model.sum(v[i] for i in nodes) == k)
+
+sol = model.solve()
+#sol.print_solution()
